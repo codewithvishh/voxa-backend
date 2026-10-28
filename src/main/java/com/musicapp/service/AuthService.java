@@ -29,11 +29,11 @@ public class AuthService {
             throw new IllegalArgumentException("An account with email " + email + " already exists. Please log in.");
         }
 
-        String otp = emailService.generateAndSendOtp(email, request.getName());
+        emailService.generateAndSendOtp(email, request.getName());
 
         return OtpStatusResponse.builder()
             .success(true)
-            .message("Verification code sent! (Cloud test OTP: " + otp + " or 123456)")
+            .message("Verification One Time Password (OTP) has been sent to " + email)
             .email(email)
             .build();
     }
