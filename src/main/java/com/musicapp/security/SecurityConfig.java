@@ -62,6 +62,8 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                 // Public authentication & browsing endpoints
                 .requestMatchers(
+                    "/",
+                    "/health",
                     "/api/auth/**",
                     "/auth/**",
                     "/api/songs/**",
