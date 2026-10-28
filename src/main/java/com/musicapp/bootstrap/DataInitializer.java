@@ -25,6 +25,18 @@ public class DataInitializer implements CommandLineRunner {
     private final PlaylistSongRepository playlistSongRepository;
     private final PasswordEncoder passwordEncoder;
 
+    @org.springframework.beans.factory.annotation.Value("${app.seed.admin.email:admin@musicapp.com}")
+    private String adminEmail;
+
+    @org.springframework.beans.factory.annotation.Value("${app.seed.admin.password:admin123}")
+    private String adminPassword;
+
+    @org.springframework.beans.factory.annotation.Value("${app.seed.demo.email:user@musicapp.com}")
+    private String demoEmail;
+
+    @org.springframework.beans.factory.annotation.Value("${app.seed.demo.password:user123}")
+    private String demoPassword;
+
     @Override
     @Transactional
     public void run(String... args) {
@@ -34,30 +46,30 @@ public class DataInitializer implements CommandLineRunner {
     }
 
     private void seedUsers() {
-        if (!userRepository.existsByEmail("admin@musicapp.com")) {
+        if (!userRepository.existsByEmail(adminEmail)) {
             User admin = User.builder()
                 .name("System Administrator")
-                .email("admin@musicapp.com")
-                .passwordHash(passwordEncoder.encode("admin123"))
+                .email(adminEmail)
+                .passwordHash(passwordEncoder.encode(adminPassword))
                 .role(Role.ROLE_ADMIN)
                 .avatarUrl("https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150")
                 .active(true)
                 .build();
             userRepository.save(admin);
-            log.info("Initialized default ADMIN account: admin@musicapp.com / admin123");
+            log.info("Initialized default ADMIN account: {}", adminEmail);
         }
 
-        if (!userRepository.existsByEmail("user@musicapp.com")) {
+        if (!userRepository.existsByEmail(demoEmail)) {
             User demoUser = User.builder()
                 .name("Alex Rivers")
-                .email("user@musicapp.com")
-                .passwordHash(passwordEncoder.encode("user123"))
+                .email(demoEmail)
+                .passwordHash(passwordEncoder.encode(demoPassword))
                 .role(Role.ROLE_USER)
                 .avatarUrl("https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150")
                 .active(true)
                 .build();
             userRepository.save(demoUser);
-            log.info("Initialized default USER account: user@musicapp.com / user123");
+            log.info("Initialized default USER account: {}", demoEmail);
         }
     }
 
