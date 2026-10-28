@@ -103,9 +103,9 @@ public class SongService {
             .map(s -> mapToSongDto(s, likedSongIds.contains(s.getId())))
             .collect(Collectors.toList()));
 
-        // FAST-PATH: If local database already has good search results (4+ songs),
+        // FAST-PATH: If local database already has a comprehensive result set (15+ songs),
         // return immediately in sub-50ms without blocking on external network calls!
-        if (dtos.size() >= 4) {
+        if (dtos.size() >= 15) {
             dtos.sort((a, b) -> Long.compare(b.getPlayCount() != null ? b.getPlayCount() : 0L, a.getPlayCount() != null ? a.getPlayCount() : 0L));
             PageResponse<SongDto> fastResponse = PageResponse.<SongDto>builder()
                 .content(dtos)
@@ -120,9 +120,9 @@ public class SongService {
             return fastResponse;
         }
 
-        // Otherwise supplement with fast single-page cloud catalog results
+        // Otherwise supplement with rich cloud catalog results (up to 30 tracks)
         try {
-            List<SongDto> liveResults = jioSaavnService.searchAndPersist(cleanedQuery, 20, currentUserId);
+            List<SongDto> liveResults = jioSaavnService.searchAndPersist(cleanedQuery, 30, currentUserId);
             java.util.Map<String, SongDto> liveMap = new java.util.HashMap<>();
             for (SongDto liveSong : liveResults) {
                 if (liveSong.getTitle() != null) {
@@ -141,15 +141,18 @@ public class SongService {
                 }
             }
 
-            Set<String> existingTitles = dtos.stream()
+            Set<String> existingKeys = dtos.stream()
                 .filter(d -> d.getTitle() != null)
-                .map(d -> d.getTitle().toLowerCase().trim())
+                .map(d -> (d.getTitle().toLowerCase().trim() + "_" + (d.getArtistName() != null ? d.getArtistName().toLowerCase().trim() : "")))
                 .collect(Collectors.toSet());
 
             for (SongDto liveSong : liveResults) {
-                if (liveSong.getTitle() != null && !existingTitles.contains(liveSong.getTitle().toLowerCase().trim())) {
-                    dtos.add(liveSong);
-                    existingTitles.add(liveSong.getTitle().toLowerCase().trim());
+                if (liveSong.getTitle() != null) {
+                    String k = liveSong.getTitle().toLowerCase().trim() + "_" + (liveSong.getArtistName() != null ? liveSong.getArtistName().toLowerCase().trim() : "");
+                    if (!existingKeys.contains(k)) {
+                        dtos.add(liveSong);
+                        existingKeys.add(k);
+                    }
                 }
             }
         } catch (Exception ex) {

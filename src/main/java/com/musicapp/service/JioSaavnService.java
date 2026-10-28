@@ -88,7 +88,7 @@ public class JioSaavnService {
         }
 
         java.util.Set<String> seenNormalizedTitles = new java.util.HashSet<>();
-        int targetCount = Math.min(limit, 20);
+        int targetCount = Math.max(limit, 30);
         int maxPages = 1;
 
         try {
@@ -97,7 +97,7 @@ public class JioSaavnService {
             for (int page = 1; page <= maxPages && resultList.size() < targetCount; page++) {
                 try {
                     String url = String.format(
-                        "https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=25&p=%d&q=%s",
+                        "https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=35&p=%d&q=%s",
                         page,
                         encodedQuery
                     );
@@ -106,7 +106,7 @@ public class JioSaavnService {
                         .uri(URI.create(url))
                         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         .header("Accept", "application/json, text/plain, */*")
-                        .timeout(Duration.ofMillis(2500))
+                        .timeout(Duration.ofMillis(2800))
                         .GET()
                         .build();
 
@@ -121,7 +121,10 @@ public class JioSaavnService {
                             java.util.Map<String, JsonNode> bestByNorm = new java.util.LinkedHashMap<>();
                             for (JsonNode item : results) {
                                 String rawTitle = cleanHtml(item.path("title").asText("Unknown Title"));
-                                String norm = rawTitle.toLowerCase().replaceAll("[^a-z0-9]", "");
+                                String rawSub = cleanHtml(item.path("subtitle").asText(""));
+                                String subKey = rawSub.toLowerCase().replaceAll("[^a-z0-9]", "");
+                                if (subKey.length() > 8) subKey = subKey.substring(0, 8);
+                                String norm = rawTitle.toLowerCase().replaceAll("[^a-z0-9]", "") + "_" + subKey;
                                 if (norm.isBlank()) continue;
 
                                 if (!bestByNorm.containsKey(norm)) {
@@ -173,15 +176,30 @@ public class JioSaavnService {
                                     if (rawId == null || rawId.isBlank()) continue;
 
                                     String title = cleanHtml(item.path("title").asText("Unknown Title"));
-                                    String normTitle = title.toLowerCase().replaceAll("[^a-z0-9]", "");
+                                    String subtitle = cleanHtml(item.path("subtitle").asText("Various Artists"));
+                                    String language = item.path("language").asText("Hindi");
+
+                                    // Extract primary artist name
+                                    String primaryArtistName = subtitle;
+                                    if (primaryArtistName.contains("-")) {
+                                        primaryArtistName = primaryArtistName.split("-")[0].trim();
+                                    }
+                                    if (primaryArtistName.contains(",")) {
+                                        primaryArtistName = primaryArtistName.split(",")[0].trim();
+                                    }
+                                    if (primaryArtistName.isBlank()) {
+                                        primaryArtistName = "Bollywood Artists";
+                                    }
+
+                                    String artKey = primaryArtistName.toLowerCase().replaceAll("[^a-z0-9]", "");
+                                    if (artKey.length() > 8) artKey = artKey.substring(0, 8);
+                                    String normTitle = title.toLowerCase().replaceAll("[^a-z0-9]", "") + "_" + artKey;
                                     if (seenNormalizedTitles.contains(normTitle)) {
                                         continue;
                                     }
                                     seenNormalizedTitles.add(normTitle);
 
                                     String sourceId = "saavn_" + rawId;
-                                    String subtitle = cleanHtml(item.path("subtitle").asText("Various Artists"));
-                                    String language = item.path("language").asText("Hindi");
                                     
                                     JsonNode moreInfo = item.path("more_info");
                                     String albumName = cleanHtml(moreInfo.path("album").asText("Single"));
@@ -226,18 +244,6 @@ public class JioSaavnService {
                                             playCount = Long.parseLong(pcStr);
                                         }
                                     } catch (Exception ignored) {}
-
-                                    // Extract primary artist name
-                                    String primaryArtistName = subtitle;
-                                    if (primaryArtistName.contains("-")) {
-                                        primaryArtistName = primaryArtistName.split("-")[0].trim();
-                                    }
-                                    if (primaryArtistName.contains(",")) {
-                                        primaryArtistName = primaryArtistName.split(",")[0].trim();
-                                    }
-                                    if (primaryArtistName.isBlank()) {
-                                        primaryArtistName = "Bollywood Artists";
-                                    }
 
                                     Song song = existingMap.get(sourceId);
                                     if (song != null) {
