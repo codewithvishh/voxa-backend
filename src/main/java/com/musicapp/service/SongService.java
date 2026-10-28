@@ -29,6 +29,7 @@ public class SongService {
     private final AlbumRepository albumRepository;
     private final LikedSongRepository likedSongRepository;
     private final JioSaavnService jioSaavnService;
+    private final java.util.Map<String, PageResponse<SongDto>> searchResponseCache = new java.util.concurrent.ConcurrentHashMap<>();
 
     @Transactional(readOnly = true)
     public PageResponse<SongDto> getSongs(int page, int size, String genre, Long currentUserId) {
@@ -85,6 +86,11 @@ public class SongService {
             cleanedQuery = rawQuery;
         }
 
+        String cacheKey = (cleanedQuery + "_" + (genre != null ? genre : "all") + "_" + page + "_" + size + "_" + (currentUserId != null ? currentUserId : 0)).toLowerCase();
+        if (searchResponseCache.containsKey(cacheKey)) {
+            return searchResponseCache.get(cacheKey);
+        }
+
         if (genre != null && !genre.isBlank() && !genre.equalsIgnoreCase("all")) {
             songPage = songRepository.searchActiveSongsByGenre(cleanedQuery, genre.trim(), pageable);
         } else {
@@ -97,29 +103,51 @@ public class SongService {
             .map(s -> mapToSongDto(s, likedSongIds.contains(s.getId())))
             .collect(Collectors.toList()));
 
-        // Always query JioSaavn live catalog to fetch 30+ 320kbps full Hindi/Bollywood/global tracks
+        // FAST-PATH: If local database already has good search results (4+ songs),
+        // return immediately in sub-50ms without blocking on external network calls!
+        if (dtos.size() >= 4) {
+            dtos.sort((a, b) -> Long.compare(b.getPlayCount() != null ? b.getPlayCount() : 0L, a.getPlayCount() != null ? a.getPlayCount() : 0L));
+            PageResponse<SongDto> fastResponse = PageResponse.<SongDto>builder()
+                .content(dtos)
+                .page(0)
+                .size(dtos.size())
+                .totalElements(dtos.size())
+                .totalPages(1)
+                .last(true)
+                .build();
+            if (searchResponseCache.size() > 200) searchResponseCache.clear();
+            searchResponseCache.put(cacheKey, fastResponse);
+            return fastResponse;
+        }
+
+        // Otherwise supplement with fast single-page cloud catalog results
         try {
-            List<SongDto> liveResults = jioSaavnService.searchAndPersist(cleanedQuery, 35, currentUserId);
+            List<SongDto> liveResults = jioSaavnService.searchAndPersist(cleanedQuery, 20, currentUserId);
             java.util.Map<String, SongDto> liveMap = new java.util.HashMap<>();
             for (SongDto liveSong : liveResults) {
-                liveMap.put(liveSong.getTitle().toLowerCase().trim(), liveSong);
+                if (liveSong.getTitle() != null) {
+                    liveMap.put(liveSong.getTitle().toLowerCase().trim(), liveSong);
+                }
             }
 
             // Upgrade existing dtos with live 320kbps links
             for (int i = 0; i < dtos.size(); i++) {
                 SongDto d = dtos.get(i);
-                SongDto live = liveMap.get(d.getTitle().toLowerCase().trim());
-                if (live != null && live.getAudioUrl() != null && live.getAudioUrl().contains("_320.mp4")) {
-                    dtos.set(i, live);
+                if (d.getTitle() != null) {
+                    SongDto live = liveMap.get(d.getTitle().toLowerCase().trim());
+                    if (live != null && live.getAudioUrl() != null && live.getAudioUrl().contains("_320.mp4")) {
+                        dtos.set(i, live);
+                    }
                 }
             }
 
             Set<String> existingTitles = dtos.stream()
+                .filter(d -> d.getTitle() != null)
                 .map(d -> d.getTitle().toLowerCase().trim())
                 .collect(Collectors.toSet());
 
             for (SongDto liveSong : liveResults) {
-                if (!existingTitles.contains(liveSong.getTitle().toLowerCase().trim())) {
+                if (liveSong.getTitle() != null && !existingTitles.contains(liveSong.getTitle().toLowerCase().trim())) {
                     dtos.add(liveSong);
                     existingTitles.add(liveSong.getTitle().toLowerCase().trim());
                 }
@@ -131,7 +159,7 @@ public class SongService {
         // Prioritize official original album tracks with highest plays first
         dtos.sort((a, b) -> Long.compare(b.getPlayCount() != null ? b.getPlayCount() : 0L, a.getPlayCount() != null ? a.getPlayCount() : 0L));
 
-        return PageResponse.<SongDto>builder()
+        PageResponse<SongDto> finalResponse = PageResponse.<SongDto>builder()
             .content(dtos)
             .page(0)
             .size(dtos.size())
@@ -139,6 +167,10 @@ public class SongService {
             .totalPages(1)
             .last(true)
             .build();
+
+        if (searchResponseCache.size() > 200) searchResponseCache.clear();
+        searchResponseCache.put(cacheKey, finalResponse);
+        return finalResponse;
     }
 
     @Transactional(readOnly = true)

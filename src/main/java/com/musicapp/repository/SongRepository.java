@@ -16,6 +16,8 @@ public interface SongRepository extends JpaRepository<Song, Long> {
 
     Optional<Song> findBySourceId(String sourceId);
 
+    List<Song> findBySourceIdIn(java.util.Collection<String> sourceIds);
+
     List<Song> findByTitleIgnoreCase(String title);
 
     boolean existsBySourceId(String sourceId);

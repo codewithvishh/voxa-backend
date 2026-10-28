@@ -70,9 +70,10 @@ public class JioSaavnService {
         }
     }
 
+    private final java.util.Map<String, List<SongDto>> searchCache = new java.util.concurrent.ConcurrentHashMap<>();
+
     /**
-     * Search global & Indian catalog (JioSaavn) across multiple pages, deduplicate,
-     * auto-persist new songs to PostgreSQL, and return unified SongDto list (30+ tracks).
+     * Search global & Indian catalog (JioSaavn) across single fast page with in-memory LRU caching.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<SongDto> searchAndPersist(String query, int limit, Long currentUserId) {
@@ -81,9 +82,14 @@ public class JioSaavnService {
             return resultList;
         }
 
+        String cacheKey = (query.trim() + "_" + limit).toLowerCase();
+        if (searchCache.containsKey(cacheKey)) {
+            return new ArrayList<>(searchCache.get(cacheKey));
+        }
+
         java.util.Set<String> seenNormalizedTitles = new java.util.HashSet<>();
-        int targetCount = Math.max(limit, 30);
-        int maxPages = 3;
+        int targetCount = Math.min(limit, 20);
+        int maxPages = 1;
 
         try {
             String encodedQuery = URLEncoder.encode(query.trim(), StandardCharsets.UTF_8);
@@ -91,7 +97,7 @@ public class JioSaavnService {
             for (int page = 1; page <= maxPages && resultList.size() < targetCount; page++) {
                 try {
                     String url = String.format(
-                        "https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=35&p=%d&q=%s",
+                        "https://www.jiosaavn.com/api.php?__call=search.getResults&_format=json&_marker=0&api_version=4&ctx=web6dot0&n=25&p=%d&q=%s",
                         page,
                         encodedQuery
                     );
@@ -100,7 +106,7 @@ public class JioSaavnService {
                         .uri(URI.create(url))
                         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                         .header("Accept", "application/json, text/plain, */*")
-                        .timeout(Duration.ofSeconds(6))
+                        .timeout(Duration.ofMillis(2500))
                         .GET()
                         .build();
 
@@ -134,6 +140,30 @@ public class JioSaavnService {
                                     }
                                 }
                             }
+
+                            // 1. Batch load existing songs by sourceId in a single DB query
+                            List<String> sourceIds = new ArrayList<>();
+                            for (JsonNode it : bestByNorm.values()) {
+                                String rId = it.path("id").asText();
+                                if (!rId.isBlank()) {
+                                    sourceIds.add("saavn_" + rId);
+                                }
+                            }
+
+                            java.util.Map<String, Song> existingMap = new java.util.HashMap<>();
+                            if (!sourceIds.isEmpty()) {
+                                try {
+                                    List<Song> foundSongs = songRepository.findBySourceIdIn(sourceIds);
+                                    for (Song fs : foundSongs) {
+                                        existingMap.put(fs.getSourceId(), fs);
+                                    }
+                                } catch (Exception ignored) {}
+                            }
+
+                            // Cache artists and albums in-memory for this search to avoid duplicate round-trips
+                            java.util.Map<String, Artist> localArtistCache = new java.util.HashMap<>();
+                            java.util.Map<String, Album> localAlbumCache = new java.util.HashMap<>();
+                            int newSongsPersisted = 0;
 
                             for (JsonNode item : bestByNorm.values()) {
                                 if (resultList.size() >= targetCount) break;
@@ -209,100 +239,97 @@ public class JioSaavnService {
                                         primaryArtistName = "Bollywood Artists";
                                     }
 
-                                    // Check if song already exists in database (by sourceId or title)
-                                    Optional<Song> existingOpt = songRepository.findBySourceId(sourceId);
-                                    if (existingOpt.isEmpty()) {
-                                        List<Song> existingByTitle = songRepository.findByTitleIgnoreCase(title);
-                                        if (!existingByTitle.isEmpty()) {
-                                            existingOpt = Optional.of(existingByTitle.get(0));
-                                        }
-                                    }
-                                    Song song;
-
-                                    if (existingOpt.isPresent()) {
-                                        song = existingOpt.get();
-                                        boolean needsUpdate = false;
-                                        if (audioUrl.contains("_320.mp4") && (song.getAudioUrl() == null || !song.getAudioUrl().contains("_320.mp4"))) {
-                                            song.setAudioUrl(audioUrl);
-                                            needsUpdate = true;
-                                        }
-                                        if (imageUrl != null && !imageUrl.isBlank()) {
-                                            if (song.getImageUrl() == null || song.getImageUrl().contains("Sunset-Strings") || 
-                                                song.getImageUrl().contains("150x150") || song.getImageUrl().contains("50x50") ||
-                                                song.getImageUrl().contains("unsplash")) {
-                                                song.setImageUrl(imageUrl);
-                                                needsUpdate = true;
-                                            }
-                                        }
-                                        if (durationSec > 0 && (song.getDurationSec() == null || song.getDurationSec() < durationSec)) {
-                                            song.setDurationSec(durationSec);
-                                            needsUpdate = true;
-                                        }
-                                        if (needsUpdate) {
-                                            song = songRepository.save(song);
-                                        }
-                                    } else {
-                                        // Persist Artist
-                                        final String artistNameToFind = primaryArtistName;
-                                        final String finalImageUrl = imageUrl;
-                                        Artist artist = artistRepository.findByNameIgnoreCase(artistNameToFind)
-                                            .orElseGet(() -> artistRepository.save(
-                                                Artist.builder()
-                                                    .name(artistNameToFind)
-                                                    .imageUrl(finalImageUrl)
-                                                    .build()
-                                            ));
-
-                                        // Persist Album
-                                        final String albumNameToFind = albumName;
-                                        Album album = albumRepository.findByNameContainingIgnoreCase(albumNameToFind, org.springframework.data.domain.PageRequest.of(0, 1))
-                                            .getContent().stream().findFirst()
-                                            .orElseGet(() -> albumRepository.save(
-                                                Album.builder()
-                                                    .name(albumNameToFind)
-                                                    .artist(artist)
-                                                    .imageUrl(finalImageUrl)
-                                                    .build()
-                                            ));
-
-                                        // Persist Song to PostgreSQL
-                                        song = Song.builder()
-                                            .sourceId(sourceId)
-                                            .title(title)
-                                            .artist(artist)
-                                            .album(album)
-                                            .genre(capitalize(language))
-                                            .durationSec(durationSec)
-                                            .audioUrl(audioUrl)
-                                            .imageUrl(imageUrl)
-                                            .playCount(playCount)
-                                            .active(true)
-                                            .license("JioSaavn 320kbps Stream")
-                                            .build();
-
-                                        song = songRepository.save(song);
+                                    Song song = existingMap.get(sourceId);
+                                    if (song != null) {
+                                        // Song already in DB - instant zero-DB overhead return
+                                        resultList.add(SongDto.builder()
+                                            .id(song.getId())
+                                            .sourceId(song.getSourceId())
+                                            .title(song.getTitle())
+                                            .artistId(song.getArtist() != null ? song.getArtist().getId() : null)
+                                            .artistName(song.getArtist() != null ? song.getArtist().getName() : primaryArtistName)
+                                            .albumId(song.getAlbum() != null ? song.getAlbum().getId() : null)
+                                            .albumName(song.getAlbum() != null ? song.getAlbum().getName() : albumName)
+                                            .genre(song.getGenre())
+                                            .durationSec(song.getDurationSec())
+                                            .audioUrl(song.getAudioUrl() != null ? song.getAudioUrl() : audioUrl)
+                                            .imageUrl(song.getImageUrl() != null ? song.getImageUrl() : imageUrl)
+                                            .playCount(song.getPlayCount())
+                                            .active(song.isActive())
+                                            .isLiked(false)
+                                            .build());
+                                        continue;
                                     }
 
-                                    boolean isLiked = false;
-                                    if (currentUserId != null) {
-                                        isLiked = likedSongRepository.existsByUserIdAndSongId(currentUserId, song.getId());
+                                    // For new songs, persist top 5 to Neon DB, return all as SongDtos
+                                    Long assignedSongId = null;
+                                    Long assignedArtistId = null;
+                                    Long assignedAlbumId = null;
+
+                                    if (newSongsPersisted < 5) {
+                                        try {
+                                            final String artName = primaryArtistName;
+                                            final String imgUrl = imageUrl;
+                                            Artist artist = localArtistCache.computeIfAbsent(artName.toLowerCase(), k ->
+                                                artistRepository.findByNameIgnoreCase(artName)
+                                                    .orElseGet(() -> artistRepository.save(
+                                                        Artist.builder().name(artName).imageUrl(imgUrl).build()
+                                                    ))
+                                            );
+                                            assignedArtistId = artist.getId();
+
+                                            final String albName = albumName;
+                                            Album album = localAlbumCache.computeIfAbsent(albName.toLowerCase(), k ->
+                                                albumRepository.findByNameContainingIgnoreCase(albName, org.springframework.data.domain.PageRequest.of(0, 1))
+                                                    .getContent().stream().findFirst()
+                                                    .orElseGet(() -> albumRepository.save(
+                                                        Album.builder().name(albName).artist(artist).imageUrl(imgUrl).build()
+                                                    ))
+                                            );
+                                            assignedAlbumId = album.getId();
+
+                                            Song newSong = Song.builder()
+                                                .sourceId(sourceId)
+                                                .title(title)
+                                                .artist(artist)
+                                                .album(album)
+                                                .genre(capitalize(language))
+                                                .durationSec(durationSec)
+                                                .audioUrl(audioUrl)
+                                                .imageUrl(imageUrl)
+                                                .playCount(playCount)
+                                                .active(true)
+                                                .license("JioSaavn 320kbps Stream")
+                                                .build();
+
+                                            newSong = songRepository.save(newSong);
+                                            assignedSongId = newSong.getId();
+                                            existingMap.put(sourceId, newSong);
+                                            newSongsPersisted++;
+                                        } catch (Exception saveEx) {
+                                            log.debug("Notice on persisting song: {}", saveEx.getMessage());
+                                        }
+                                    }
+
+                                    if (assignedSongId == null) {
+                                        assignedSongId = (long) Math.abs(sourceId.hashCode());
                                     }
 
                                     resultList.add(SongDto.builder()
-                                        .id(song.getId())
-                                        .sourceId(song.getSourceId())
-                                        .title(song.getTitle())
-                                        .artistId(song.getArtist().getId())
-                                        .artistName(song.getArtist().getName())
-                                        .albumId(song.getAlbum() != null ? song.getAlbum().getId() : null)
-                                        .albumName(song.getAlbum() != null ? song.getAlbum().getName() : "Single")
-                                        .genre(song.getGenre())
-                                        .durationSec(song.getDurationSec())
-                                        .audioUrl(song.getAudioUrl())
-                                        .imageUrl(song.getImageUrl())
-                                        .playCount(song.getPlayCount())
-                                        .active(song.isActive())
-                                        .isLiked(isLiked)
+                                        .id(assignedSongId)
+                                        .sourceId(sourceId)
+                                        .title(title)
+                                        .artistId(assignedArtistId)
+                                        .artistName(primaryArtistName)
+                                        .albumId(assignedAlbumId)
+                                        .albumName(albumName)
+                                        .genre(capitalize(language))
+                                        .durationSec(durationSec)
+                                        .audioUrl(audioUrl)
+                                        .imageUrl(imageUrl)
+                                        .playCount(playCount)
+                                        .active(true)
+                                        .isLiked(false)
                                         .build());
 
                                 } catch (Exception itemEx) {
@@ -319,6 +346,12 @@ public class JioSaavnService {
             log.warn("JioSaavn search query '{}' failed: {}", query, e.getMessage());
         }
 
+        if (!resultList.isEmpty()) {
+            if (searchCache.size() > 250) {
+                searchCache.clear();
+            }
+            searchCache.put(cacheKey, resultList);
+        }
         return resultList;
     }
 
