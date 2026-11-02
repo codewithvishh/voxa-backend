@@ -1,5 +1,7 @@
 package com.musicapp.service;
 
+import org.springframework.cache.annotation.Cacheable;
+
 import com.musicapp.dto.CatalogDto.*;
 import com.musicapp.model.Album;
 import com.musicapp.model.Song;
@@ -30,6 +32,11 @@ public class AlbumService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(
+        value = "albumDetails",
+        key = "#id + '_' + (#currentUserId != null ? #currentUserId : 0)",
+        unless = "#result == null"
+    )
     public AlbumDto getAlbumById(Long id, Long currentUserId) {
         Album album = albumRepository.findById(id)
             .orElseThrow(() -> new IllegalArgumentException("Album not found with id: " + id));

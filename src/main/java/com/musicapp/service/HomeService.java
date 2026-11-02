@@ -1,5 +1,7 @@
 package com.musicapp.service;
 
+import org.springframework.cache.annotation.Cacheable;
+
 import com.musicapp.dto.CatalogDto.*;
 import com.musicapp.model.Song;
 import com.musicapp.repository.PlayHistoryRepository;
@@ -34,6 +36,11 @@ public class HomeService {
     }
 
     @Transactional
+    @Cacheable(
+        value = "homeSections",
+        key = "'home_' + (#currentUserId != null ? #currentUserId : 0)",
+        unless = "#result == null"
+    )
     public HomeSectionDto getHomeSections(Long currentUserId) {
         Set<Long> likedSongIds = songService.getLikedSongIds(currentUserId);
 

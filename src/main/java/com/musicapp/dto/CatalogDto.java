@@ -2,6 +2,7 @@ package com.musicapp.dto;
 
 import lombok.*;
 
+import java.io.Serializable;
 import java.util.List;
 
 public class CatalogDto {
@@ -10,7 +11,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class SongDto {
+    public static class SongDto implements Serializable {
+        private static final long serialVersionUID = 1L;
         private Long id;
         private String sourceId;
         private String title;
@@ -32,7 +34,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class ArtistDto {
+    public static class ArtistDto implements Serializable {
+        private static final long serialVersionUID = 1L;
         private Long id;
         private String name;
         private String imageUrl;
@@ -44,7 +47,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class AlbumDto {
+    public static class AlbumDto implements Serializable {
+        private static final long serialVersionUID = 1L;
         private Long id;
         private String name;
         private String imageUrl;
@@ -58,7 +62,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class HomeSectionDto {
+    public static class HomeSectionDto implements Serializable {
+        private static final long serialVersionUID = 1L;
         private List<SongDto> trending;
         private List<SongDto> newReleases;
         private List<String> genres;
@@ -69,7 +74,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class AutocompleteResultDto {
+    public static class AutocompleteResultDto implements Serializable {
+        private static final long serialVersionUID = 1L;
         private String query;
         private List<String> suggestions;
         private List<SongDto> songs;
@@ -80,7 +86,8 @@ public class CatalogDto {
     @NoArgsConstructor
     @AllArgsConstructor
     @Builder
-    public static class PageResponse<T> {
+    public static class PageResponse<T> implements Serializable {
+        private static final long serialVersionUID = 1L;
         private List<T> content;
         private int page;
         private int size;

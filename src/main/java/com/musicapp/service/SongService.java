@@ -1,5 +1,7 @@
 package com.musicapp.service;
 
+import org.springframework.cache.annotation.Cacheable;
+
 import com.musicapp.dto.CatalogDto.*;
 import com.musicapp.model.Song;
 import com.musicapp.repository.AlbumRepository;
@@ -68,6 +70,11 @@ public class SongService {
     }
 
     @Transactional
+    @Cacheable(
+        value = "searchSongs",
+        key = "(#query != null ? #query.trim().toLowerCase() : '') + '_' + (#genre != null ? #genre.trim().toLowerCase() : 'all') + '_' + #page + '_' + #size",
+        unless = "#result == null || #result.content == null || #result.content.isEmpty()"
+    )
     public PageResponse<SongDto> searchSongs(String query, String genre, int page, int size, Long currentUserId) {
         Pageable pageable = PageRequest.of(page, size);
         Page<Song> songPage;
@@ -177,6 +184,11 @@ public class SongService {
     }
 
     @Transactional(readOnly = true)
+    @Cacheable(
+        value = "autocomplete",
+        key = "#query != null ? #query.trim().toLowerCase() : ''",
+        unless = "#result == null"
+    )
     public AutocompleteResultDto getAutocomplete(String query) {
         if (query == null || query.trim().length() < 2) {
             return AutocompleteResultDto.builder()
