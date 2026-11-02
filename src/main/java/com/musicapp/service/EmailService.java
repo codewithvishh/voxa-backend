@@ -51,16 +51,18 @@ public class EmailService {
         // Valid for 10 minutes (600,000 ms)
         otpCache.put(cleanEmail, new OtpRecord(otp, System.currentTimeMillis() + 600000));
 
-        // If Resend API Key is set, use Resend HTTPS API over port 443 (never blocked by cloud)
-        try {
-            if (resendApiKey != null && !resendApiKey.isBlank()) {
-                sendViaResend(cleanEmail, otp, userName);
-            } else {
-                sendVerificationEmail(cleanEmail, otp, userName);
+        // Asynchronously dispatch email in background so HTTP endpoint responds in <5ms without blocking
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                if (resendApiKey != null && !resendApiKey.isBlank()) {
+                    sendViaResend(cleanEmail, otp, userName);
+                } else {
+                    sendVerificationEmail(cleanEmail, otp, userName);
+                }
+            } catch (Exception e) {
+                log.warn("Email delivery notice for {}: {}. OTP {} is cached in memory and universal test OTP 123456 is active.", cleanEmail, e.getMessage(), otp);
             }
-        } catch (Exception e) {
-            log.warn("Email delivery notice for {}: {}. OTP {} is cached in memory and universal test OTP 123456 is active.", cleanEmail, e.getMessage(), otp);
-        }
+        });
         return otp;
     }
 
